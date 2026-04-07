@@ -1,47 +1,64 @@
 # infra/habitsignal-collector.nix
-# NixOS systemd サービス定義
-# configuration.nix から imports に追加して使う
+# NixOS service definition (reference)
+# Actual deployment lives in dotfiles as a NixOS module with sops-nix secrets.
 
-{ config, pkgs, ... }:
+{ config, pkgs, lib, ... }:
+let
+  cfg = config.yktsnet.apps.habitsignal;
+  homeDir = config.users.users.yktsnet.home;
+  appRoot = "${homeDir}/dotfiles/apps/habitsignal/server/collector";
+  envFile = config.sops.secrets."habitsignal/habitsignal.env".path;
 
+  appEnv = pkgs.python3.withPackages (ps: with ps; [
+    paho-mqtt
+    psycopg2
+  ]);
+in
 {
-  systemd.services.habitsignal-collector = {
-    description = "HabitSignal MQTT Collector";
-    after = [ "network.target" "mosquitto.service" "mongodb.service" ];
-    wantedBy = [ "multi-user.target" ];
-
-    serviceConfig = {
-      ExecStart = "${pkgs.python3}/bin/python3 /var/lib/habitsignal/collector/main.py";
-      WorkingDirectory = "/var/lib/habitsignal/collector";
-      EnvironmentFile = "/var/lib/habitsignal/collector/.env";
-      Restart = "on-failure";
-      RestartSec = "5s";
-      User = "habitsignal";
-    };
+  options.yktsnet.apps.habitsignal = {
+    enable = lib.mkEnableOption "HabitSignal";
+    collector = lib.mkEnableOption "MQTT -> PostgreSQL collector";
   };
 
-  # Mosquitto ブローカー
-  services.mosquitto = {
-    enable = true;
-    listeners = [
-      {
+  config = lib.mkIf cfg.enable {
+
+    # Mosquitto MQTT broker
+    services.mosquitto = {
+      enable = true;
+      listeners = [{
         port = 1883;
         address = "0.0.0.0";
         settings.allow_anonymous = true;
-      }
-    ];
-  };
+        acl = [ "topic readwrite #" ];
+      }];
+    };
 
-  # MongoDB
-  services.mongodb = {
-    enable = true;
-    bind_ip = "127.0.0.1";
-  };
+    # PostgreSQL: habitsignal DB and user
+    # services.postgresql is already enabled in het/system.nix
+    services.postgresql.ensureDatabases = [ "habitsignal" ];
+    services.postgresql.ensureUsers = [{
+      name = "habitsignal";
+      ensureDBOwnership = true;
+    }];
 
-  # サービス実行ユーザー
-  users.users.habitsignal = {
-    isSystemUser = true;
-    group = "habitsignal";
+    # Firewall: open MQTT port
+    networking.firewall.allowedTCPPorts = [ 1883 ];
+
+    # Collector service
+    systemd.user.services = {
+      habitsignal-collector = lib.mkIf cfg.collector {
+        description = "HabitSignal MQTT Collector";
+        wantedBy = [ "default.target" ];
+        after = [ "mosquitto.service" "postgresql.service" ];
+        serviceConfig = {
+          Type = "simple";
+          WorkingDirectory = appRoot;
+          EnvironmentFile = envFile;
+          ExecStart = "${appEnv}/bin/python3 ${appRoot}/main.py";
+          Restart = "on-failure";
+          RestartSec = "5s";
+        };
+      };
+    };
   };
-  users.groups.habitsignal = {};
 }
