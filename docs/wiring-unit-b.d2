@@ -1,0 +1,97 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    sketch: true
+    pad: 40
+  }
+  primary: "#2563eb"
+  accent: "#7c3aed"
+}
+
+classes: {
+  box_node: {
+    style: {
+      font-size: 15
+      stroke-width: 1
+      border-radius: 8
+      fill: "#ffffff"
+      stroke: "#cbd5e1"
+      font-color: "#1e293b"
+    }
+  }
+  accent_node: {
+    style: {
+      font-size: 15
+      stroke-width: 2
+      border-radius: 8
+      fill: "#eff6ff"
+      stroke: ${primary}
+      font-color: ${primary}
+    }
+  }
+  purple_node: {
+    style: {
+      font-size: 15
+      stroke-width: 2
+      border-radius: 8
+      fill: "#f5f3ff"
+      stroke: ${accent}
+      font-color: ${accent}
+    }
+  }
+  container_box: {
+    style: {
+      fill: "#f1f5f9"
+      stroke: "#e2e8f0"
+      border-radius: 12
+      font-color: "#64748b"
+      font-size: 13
+    }
+  }
+}
+
+direction: down
+
+MQTT: "Mosquitto\n(het VPS)" {
+  class: purple_node
+  shape: hexagon
+}
+
+MCU: "Unit B  —  ESP32-C3" {
+  class: container_box
+
+  Core: "MicroPython" {
+    class: accent_node
+    shape: hexagon
+  }
+  UART: "UART\nGPIO20 (RX) / GPIO21 (TX)\nbaud: 256000" {
+    class: box_node
+  }
+  Core -> UART: "" {
+    style: { stroke: ${primary}; stroke-width: 2 }
+  }
+}
+
+Radar: "LD2410C\n24GHz mmWave" {
+  class: box_node
+}
+
+MCU.Core -> MQTT: "desk_on / desk_off\non state change only" {
+  style: {
+    stroke: ${accent}
+    stroke-width: 2
+    animated: true
+    font-color: ${accent}
+    font-size: 13
+  }
+}
+
+MCU.UART -> Radar: "3.3V / GND" {
+  style: {
+    stroke: ${primary}
+    stroke-dash: 5
+    font-color: "#94a3b8"
+    font-size: 13
+  }
+}

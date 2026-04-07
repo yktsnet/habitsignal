@@ -1,266 +1,181 @@
-# HabitSignal — 仕様書
+# HabitSignal — Spec
 
-> 自宅作業における行動・環境・主観を4レイヤーで計測し、
-> 仕事が進みやすい条件の傾向を自分で観測するためのシステム
-
----
-
-## 目的
-
-- 決めた仕事ブロック（午前・午後・夕方）の達成率を客観的に記録する
-- 主観的な「うまく進んだ感覚」とその時の環境・行動データを紐付ける
-- 相関や傾向を観測し、行動改善の仮説を自分で立てられるようにする
-
-**注意：** このシステムが観測するのは生産性そのものではなく、
-仕事を進めやすい状態に関連する代理指標である。
-相関が見えても因果を保証するものではない。
+> A personal IoT system that logs behavior, environment, and subjective scores across 4 measurement layers — to observe what conditions help work go well.
 
 ---
 
-## 計測レイヤー
+## Purpose
 
-### Layer 1 — 目標（計画）
-計測ではなく基準値。事前に設定しておく。
+- Track whether planned work blocks (morning / afternoon / evening) are completed
+- Correlate the subjective feeling of "things went well" with environmental and behavioral data
+- Build hypotheses about what conditions improve focus — from your own data
 
-- 仕事ブロックの定義と予定時間
-- 例：午前 3h / 昼過ぎ 2h / 夕方 1.5h
-- 日によって構造が変わる（午前だけの日、3ブロックある日）
+**Note:** This system measures proxy indicators, not productivity itself. Correlation observed does not imply causation.
 
-### Layer 2 — 実績（客観計測）
-センサーとトリガーで取得した生データをそのまま MongoDB に保存する。
-集計・切り分けはクエリで行う。Python 側にロジックは持たない。
+---
 
-| 項目 | 手段 | 記録内容 |
+## Measurement Layers
+
+### Layer 1 — Plan
+Pre-configured targets. Not measured — used as the baseline.
+
+- Work block definitions with planned durations
+- Example: Morning 3h / Afternoon 2h / Evening 1.5h
+- Structure can vary day to day
+
+### Layer 2 — Actual (Objective)
+Raw events from sensors and NFC triggers, stored as-is. No logic on the Python side — all aggregation via SQL queries.
+
+| Item | Method | Recorded |
 |---|---|---|
-| 在席 | LD2410C（mmWaveレーダー） | 在席・離席のタイムスタンプ |
-| 仕事モード | NFC タグ / ボタン | ON/OFF のタイムスタンプ |
-| 給水 | NFC タグ / ボタン | タイムスタンプ |
-| 運動・筋トレ | NFC タグ / ボタン | 開始・終了・種別のタイムスタンプ |
+| Desk presence | LD2410C mmWave radar | Timestamps of on/off transitions |
+| Work mode | NFC tag / button | ON/OFF timestamps |
+| Hydration | NFC tag / button | Timestamps |
+| Exercise | NFC tag / button | Start / end / type timestamps |
 
-### Layer 3 — 主観（自己評価）
-仕事ブロック終了時に OLED メニューから手動入力する。
+### Layer 3 — Subjective Score
+Entered manually via OLED menu at the end of each work block.
 
-- その時間帯がうまく進んだ感覚を 1〜5 で入力
-- タイムスタンプ付きで MongoDB に保存
+- 1–5 rating for how well the block went
+- Stored with timestamp, linked to the block by time range
 
-### Layer 4 — 条件（環境・音楽）
-Layer 2・3 に影響している可能性がある変数。生データをそのまま保存する。
+### Layer 4 — Conditions
+Variables that may influence Layer 2 and 3. Stored as raw events.
 
-| 項目 | 手段 | 記録内容 |
+| Item | Method | Recorded |
 |---|---|---|
-| 温度・湿度 | BME280 | タイムスタンプ + 計測値 |
-| 再生トラック | Spotify API（VPS poller・60秒ごと） | タイムスタンプ + track情報 |
-| 音楽特徴量 | Spotify audio features | energy / valence / tempo |
-| 仕事モードとの紐付け | MongoDB のクエリで抽出 | 仕事モード ON 期間と再生タイムスタンプを突合 |
+| Temperature / humidity | AHT20 + BMP280 | Timestamp + values |
+| Now playing | Spotify API (VPS poller, 60s) | Timestamp + track info |
+| Audio features | Spotify audio features | energy / valence / tempo |
 
 ---
 
-## MongoDB を使う理由
+## Database Design (PostgreSQL)
 
-このシステムの問いは「**どのブロックが良かったか**」という比較です。
+All events are stored in a single `events` table. Analysis is done via SQL queries — no preprocessing logic in Python.
 
-生データを時刻で並べて貯めるだけでは答えが出ません。
-「運動した日のブロック達成率の平均」「主観スコアが高いブロックの温湿度」という問いは、
-MongoDB の aggregate クエリで自然に書けます。
+```sql
+CREATE TABLE events (
+    id        SERIAL PRIMARY KEY,
+    type      TEXT NOT NULL,
+    ts        BIGINT NOT NULL,
+    server_ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    payload   JSONB
+);
+```
 
-また Layer 1 のブロック定義は日によって構造が変わります。
-「今日は午前だけ」「明日は3ブロック」という差分を
-schema レスの document で柔軟に持てることも MongoDB が合う理由です。
+**Event types:** `desk_on`, `desk_off`, `work_on`, `work_off`, `water`, `exercise_start`, `exercise_end`, `env`, `spotify`, `score`
 
-InfluxDB は「時刻→値」の単純な時系列の蓄積に強いですが、
-ブロック同士を条件で絞って比較するクエリは苦手です。
+**Example queries:**
+- Work minutes per day → filter `work_on/off`, group by date
+- Score vs environment → join `score` events with `env` events within ±30 min
+- Exercise days → distinct dates with `exercise_start`
 
 ---
 
-## MongoDB コレクション設計
+## Correlations to Explore
 
-### events（生ログ）
-すべてのセンサーイベントとトリガーをそのまま保存する。
+- Layer 4 → Layer 2: Do conditions affect block completion rate?
+- Layer 4 → Layer 3: Do conditions affect subjective score?
+- Layer 2 vs Layer 3 gap: High completion but low score — or vice versa
 
-```
-{
-  ts: ISODate,
-  type: "desk_on" | "desk_off" | "work_on" | "work_off"
-       | "water" | "exercise_start" | "exercise_end"
-       | "env" | "spotify" | "score",
-  payload: { ... }
-}
-```
+### Initial Hypotheses
+1. Higher room temperature → shorter work mode durations?
+2. Exercise days → higher afternoon block completion?
+3. High-energy music (tempo > 130) → higher subjective score?
+4. Fewer hydration events → lower subjective score?
 
-### blocks（仕事ブロック定義）
-Layer 1 の計画。日ごとに構造が異なってよい。
-
-```
-{
-  date: "2026-04-06",
-  blocks: [
-    { name: "午前", start: "09:00", plan_minutes: 180 },
-    { name: "午後", start: "13:00", plan_minutes: 120 }
-  ]
-}
-```
-
-### 分析はクエリで行う
-Python 側にロジックは持たない。
-「午前ブロックの時間帯に work_on イベントが何分あったか」は
-events コレクションを aggregate で集計して出す。
+### Known Measurement Limitations
+- LD2410C may misfire from wall/object reflections
+- Work mode depends on manual NFC trigger — missed entries possible
+- Subjective score is influenced by immediate emotion at input time
+- Correlations do not account for day-of-week, task type, or sample size
 
 ---
 
-## 相関の見方
+## Hardware
 
-- Layer 4 → Layer 2（条件が達成率に影響するか）
-- Layer 4 → Layer 3（条件が主観スコアに影響するか）
-- Layer 2 と Layer 3 のズレ（達成率は高いのに主観が低い日、など）
+### Unit A — Main Hub (desk)
 
-### 最初に立てる仮説
-1. 室温が高い時間帯は仕事モードの継続時間が短くなるか
-2. 運動した日の午後ブロックは達成率が高いか
-3. high energy の音楽（tempo > 130）の時間帯と主観スコアに関係があるか
-4. 給水ペースが落ちると主観スコアが下がるか
+- ESP32-C3
+- SSD1306 OLED 1"
+- PN532 NFC reader (I2C mode)
+- AHT20 + BMP280 (I2C)
 
-### 計測上の限界（既知のノイズ）
-- LD2410C は壁や物体の反射で誤検知することがある
-- 仕事モードは手動トリガーに依存するため入力漏れが発生しうる
-- 主観スコアはブロック直後の感情に引きずられるバイアスがある
-- 相関はサンプル数・曜日差・仕事内容の差を考慮していない
+**OLED pages:**
+```
+[HOME]    Block completion rate / temp+humidity / current mode
+[LOG]     Log water / exercise / subjective score
+[STATUS]  Today's habit summary
+```
+
+**NFC tag assignments:**
+- Work mode toggle (desk side)
+- Hydration log (near water)
+- Exercise start/end (near equipment)
+
+### Unit B — Presence Sensor (under desk)
+
+- ESP32-C3
+- LD2410C 24GHz mmWave radar
+
+Detects presence changes and publishes `desk_on` / `desk_off` via MQTT. No logic on device.
+
+### Unit C — Sub Display *(Phase 2)*
+
+- ESP32-C3
+- SSD1306 OLED 1"
+
+Subscribes to MQTT and displays Spotify now-playing and current temperature. Display only — no logic.
 
 ---
 
-## デバイス構成
-
-### Unit A — メインハブ（デスク上）
-
-**ハードウェア**
-- ESP32C3
-- OLED 1インチ（SSD1306）
-- ボタン 3個（上・下・決定）
-- NFC リーダー（PN532）
-- BME280（温湿度）
-- スズメッキ線による自作マウント
-
-**OLED ページ構成**
-```
-[HOME]    今日のブロック達成率 / 現在の温湿度 / 現在のモード
-[LOG]     給水 / 運動 / 主観スコア入力
-[STATUS]  今日の習慣達成状況（給水回数・運動）
-```
-
-**NFC タグ割り当て**
-- 仕事モード ON/OFF 用（デスク脇に固定）
-- 給水ログ用（コップ台や水場に固定）
-- 運動開始・終了用（器具や玄関に固定）
-
-### Unit B — 在席センサー（デスク下）
-
-**ハードウェア**
-- ESP32C3
-- LD2410C（24GHz mmWave レーダー）
-
-**動作**
-- 在席・離席の変化を検知したら MQTT で publish するだけ
-- ロジックは持たない
-
-### Unit C — サブ表示（Phase 2 以降）
-
-**ハードウェア**
-- ESP32C3
-- OLED 1インチ（SSD1306）
-
-**動作**
-- VPS から MQTT で Spotify 再生中トラック・温湿度を受け取り表示
-- 最大 60 秒の遅延あり（Spotify poller の間隔による）
-- 表示のみ。ロジックは持たない
-
----
-
-## システム構成
+## System Architecture
 
 ```
-Unit A（ESP32C3）─┐
-Unit B（ESP32C3）─┼─ MQTT publish ──→ Mosquitto（VPS）
-Unit C（ESP32C3）─┘        ↑               │
-   ↑ MQTT subscribe        │         Python collector
-   └───────────────────────┘         ├─ 生データをそのまま → MongoDB
-                                     └─ Spotify poller（60秒ごと）→ MongoDB
-                                                  │
-                                              MongoDB
-                                           （aggregate で分析）
-                                                  │
-                                     Cloudflare Durable Objects
-                                                  │
-                                          SSE → Web ダッシュボード
-                                            （Astro + Hono）
+Unit A (ESP32-C3) ─┐
+Unit B (ESP32-C3) ─┼─ MQTT ──→ Mosquitto (VPS)
+                   │                 │
+                   │          Python collector
+                   │          ├─ raw events → PostgreSQL
+                   │          └─ Spotify poller (60s) → PostgreSQL
+                   │                 │
+                   │           PostgreSQL
+                   │          (SQL queries for analysis)
+                   │                 │
+                   │    Cloudflare Durable Objects
+                   │                 │
+                   └──── SSE ──→ Web Dashboard (Astro + Hono)
 ```
 
 ---
 
-## 可視化
+## Stack
 
-### Web ダッシュボード（リアルタイム）
-- 現在の仕事モード状態
-- 今日の各ブロック達成率
-- 直近の温湿度・再生中の音楽
-
-### 分析
-- 週次の達成率トレンド
-- 相関マトリクス（Layer 4 × Layer 2・3）
-- 主観スコアと条件の分布
-- すべて MongoDB の aggregate クエリで出す
-
-### Demo ページ（ポートフォリオ用）
-- 実際の1日分のサンプルデータを 30〜60 分でループ
-- 「デモ用サンプルデータをループしています」と明示する
-
----
-
-## 技術スタック
-
-| 領域 | 技術 |
+| Layer | Tech |
 |---|---|
-| ファームウェア | MicroPython or Arduino (C++) |
-| 通信 | MQTT over WiFi |
-| ブローカー | Mosquitto |
-| データ収集 | Python（systemd timer） |
-| DB | MongoDB |
-| 外部 API | Spotify Web API（spotipy） |
-| リアルタイム配信 | Cloudflare Durable Objects + SSE |
-| フロント | Astro + Hono |
-| インフラ | VPS / NixOS |
+| Firmware | MicroPython |
+| Transport | MQTT over WiFi |
+| Broker | Mosquitto |
+| Collector | Python (systemd service, NixOS) |
+| DB | PostgreSQL (JSONB for payloads) |
+| External API | Spotify Web API |
+| Realtime | Cloudflare Durable Objects + SSE |
+| Frontend | Astro + Hono |
+| Infra | NixOS / Hetzner VPS |
 
 ---
 
-## 実装フェーズ
+## Design Notes
 
-### Phase 1（先に動かす・データを貯める）
-- Unit A：仕事モード ON/OFF・BME280・OLED 表示・主観スコア入力
-- Unit B：LD2410C による在席検知
-- VPS：MQTT 受信 → MongoDB に生データ保存
-- 可視化：MongoDB aggregate で1日のブロック達成率を出すだけで十分
+**Why PostgreSQL over MongoDB or InfluxDB**
 
-### Phase 2（Phase 1 で傾向が見えてから）
-- Unit C：Spotify 再生曲・温湿度のサブ表示
-- Spotify poller の追加
-- Web ダッシュボード（Cloudflare Durable Objects + SSE）
-- 相関分析クエリの実装
+InfluxDB is optimized for simple time-series writes but struggles with cross-block comparisons. MongoDB was considered for its schema flexibility, but the VPS resource cost (200–400MB idle RAM) was too high for a shared server already running other services. PostgreSQL with a JSONB payload column covers both needs: structured querying and flexible per-event data.
 
-### Phase 3（Works として公開するタイミング）
-- Demo ページ作成
-- README に Architecture 図・設計判断を記述
-- 記事：発見した傾向と、そこから変えた行動
+**Why raw events, not pre-aggregated documents**
 
----
+Storing raw timestamped events keeps the collector simple (no logic) and leaves all interpretation to SQL queries. This makes it easy to ask new questions later without changing the data model.
 
-## ポートフォリオ掲載
+**Why MQTT over HTTP**
 
-**Works 掲載文**
-```
-HabitSignal — ESP32C3 3台による自宅生産性ロギングシステム。
-計画・実績・主観・環境の4レイヤーで計測し、仕事が進みやすい条件の傾向を観測する。
-MQTT · MongoDB · Cloudflare Durable Objects · Spotify API · NixOS
-```
-
-**ストーリーライン**
-普段から断片的にログを取っていたものを、4レイヤーの設計で統合した。
-センサーはエッジで軽く検知するだけに留め、生データをそのまま MongoDB に保存し、
-分析はすべて aggregate クエリで行う設計にした。
+Multiple ESP32-C3 units can publish to the same broker without any per-device endpoint configuration. Adding Unit C or future sensors requires no server-side changes.

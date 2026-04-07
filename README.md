@@ -1,42 +1,64 @@
 # HabitSignal
 
-> 自宅作業における行動・環境・主観を4レイヤーで計測し、
-> 仕事が進みやすい条件の傾向を自分で観測するためのシステム
+> A personal IoT system that logs behavior, environment, and subjective scores across 4 measurement layers — to observe what conditions help work go well.
 
 ## Architecture
 
 ```
-Unit A（ESP32C3）─┐
-Unit B（ESP32C3）─┼─ MQTT ──→ Mosquitto（VPS）──→ MongoDB
-Unit C（ESP32C3）─┘                                    │
-   ↑ MQTT subscribe                        Cloudflare Durable Objects
-   └───────────────────────────────────────────── SSE ──→ Web
+Unit A (ESP32-C3) ─┐
+Unit B (ESP32-C3) ─┼─ MQTT ──→ Mosquitto (VPS) ──→ PostgreSQL
+                   │                                     │
+                   │                         Cloudflare Durable Objects
+                   └──────────────────────────── SSE ──→ Web Dashboard
 ```
 
-## Layers
+## Measurement Layers
 
-| Layer | 内容 | 手段 |
+| Layer | What | How |
 |---|---|---|
-| Layer 1 | 目標（計画） | 事前設定 |
-| Layer 2 | 実績（客観計測） | センサー・NFC・ボタン |
-| Layer 3 | 主観（自己評価） | OLED メニューから入力 |
-| Layer 4 | 条件（環境・音楽） | BME280・Spotify API |
+| Layer 1 | Plan (target blocks) | Pre-configured |
+| Layer 2 | Actual (objective) | Sensors + NFC triggers |
+| Layer 3 | Subjective score | Manual input via OLED menu |
+| Layer 4 | Conditions | AHT20/BMP280 + Spotify API |
 
-## Structure
+## Hardware
+
+| Unit | Role | Components |
+|---|---|---|
+| Unit A | Main hub (desk) | ESP32-C3, SSD1306 OLED, PN532 NFC, AHT20+BMP280 |
+| Unit B | Presence sensor (under desk) | ESP32-C3, LD2410C mmWave radar |
+| Unit C | Sub display *(Phase 2)* | ESP32-C3, SSD1306 OLED |
+
+## Stack
+
+| Layer | Tech |
+|---|---|
+| Firmware | MicroPython |
+| Transport | MQTT over WiFi |
+| Broker | Mosquitto |
+| Collector | Python (systemd service) |
+| DB | PostgreSQL (JSONB for payloads) |
+| External API | Spotify Web API |
+| Realtime | Cloudflare Durable Objects + SSE |
+| Frontend | Astro + Hono |
+| Infra | NixOS / Hetzner VPS |
+
+## Repository Structure
 
 ```
 firmware/
-  unit-a/   メインハブ（NFC・ボタン・OLED・BME280）
-  unit-b/   在席センサー（LD2410C）
-  unit-c/   サブ表示（OLED・Spotify・温湿度）
+  unit-a/     Main hub firmware
+  unit-b/     Presence sensor firmware
+  unit-c/     Sub display firmware (Phase 2)
 server/
-  collector/  MQTT → MongoDB
-  spotify/    Spotify poller
-infra/        NixOS / systemd 設定
-docs/         設計ドキュメント
+  collector/  MQTT → PostgreSQL
+  spotify/    Spotify poller (Phase 2)
+infra/        NixOS service definitions
+docs/         Wiring diagrams, spec
 ```
 
 ## Docs
 
-- [仕様書](docs/spec.md)
-- [デバイス・部品リスト](docs/devices.md)
+- [Spec](docs/spec.md)
+- [Unit A Wiring](docs/wiring-unit-a.d2)
+- [Unit B Wiring](docs/wiring-unit-b.d2)

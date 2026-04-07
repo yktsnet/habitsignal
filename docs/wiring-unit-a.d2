@@ -1,0 +1,98 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+    sketch: true
+    pad: 40
+  }
+  primary: "#2563eb"
+  accent: "#7c3aed"
+}
+
+classes: {
+  box_node: {
+    style: {
+      font-size: 15
+      stroke-width: 1
+      border-radius: 8
+      fill: "#ffffff"
+      stroke: "#cbd5e1"
+      font-color: "#1e293b"
+    }
+  }
+  accent_node: {
+    style: {
+      font-size: 15
+      stroke-width: 2
+      border-radius: 8
+      fill: "#eff6ff"
+      stroke: ${primary}
+      font-color: ${primary}
+    }
+  }
+  purple_node: {
+    style: {
+      font-size: 15
+      stroke-width: 2
+      border-radius: 8
+      fill: "#f5f3ff"
+      stroke: ${accent}
+      font-color: ${accent}
+    }
+  }
+  container_box: {
+    style: {
+      fill: "#f1f5f9"
+      stroke: "#e2e8f0"
+      border-radius: 12
+      font-color: "#64748b"
+      font-size: 13
+    }
+  }
+}
+
+direction: down
+
+MQTT: "Mosquitto\n(het VPS)" {
+  class: purple_node
+  shape: hexagon
+}
+
+MCU: "Unit A  —  ESP32-C3" {
+  class: container_box
+
+  Core: "MicroPython" {
+    class: accent_node
+    shape: hexagon
+  }
+  I2C: "I2C Bus\nGPIO6 (SDA) / GPIO7 (SCL)" {
+    class: box_node
+  }
+  Core -> I2C: "" {
+    style: { stroke: ${primary}; stroke-width: 2 }
+  }
+}
+
+OLED: "SSD1306 OLED\n0x3C" { class: box_node }
+ENV:  "AHT20 + BMP280\n0x38 / 0x76" { class: box_node }
+NFC:  "PN532 NFC Reader\n0x24  (I2C mode)" { class: box_node }
+
+MCU.Core -> MQTT: "publish events (WiFi)" {
+  style: {
+    stroke: ${accent}
+    stroke-width: 2
+    animated: true
+    font-color: ${accent}
+    font-size: 13
+  }
+}
+
+MCU.I2C -> OLED: "display" {
+  style: { stroke: ${primary}; stroke-dash: 5; font-color: "#94a3b8"; font-size: 13 }
+}
+MCU.I2C -> ENV: "temp / humidity" {
+  style: { stroke: ${primary}; stroke-dash: 5; font-color: "#94a3b8"; font-size: 13 }
+}
+MCU.I2C -> NFC: "tag read" {
+  style: { stroke: ${primary}; stroke-dash: 5; font-color: "#94a3b8"; font-size: 13 }
+}

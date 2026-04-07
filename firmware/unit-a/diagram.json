@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "author": "yktsnet",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "board-esp32-c3-devkitm-1",
+      "id": "esp",
+      "top": 0,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-ssd1306",
+      "id": "oled",
+      "top": -160,
+      "left": 224,
+      "attrs": { "i2cAddress": "0x3c" }
+    },
+    {
+      "type": "wokwi-shtc3",
+      "id": "aht20",
+      "top": -160,
+      "left": 80,
+      "attrs": { "i2cAddress": "0x38" }
+    },
+    {
+      "type": "wokwi-pn532-nfc",
+      "id": "nfc",
+      "top": 200,
+      "left": 80,
+      "attrs": { "i2cAddress": "0x24" }
+    }
+  ],
+  "connections": [
+    [ "esp:3V3",  "oled:VCC",  "red",   [] ],
+    [ "esp:GND.1","oled:GND",  "black", [] ],
+    [ "esp:6",    "oled:SDA",  "blue",  [] ],
+    [ "esp:7",    "oled:SCL",  "yellow",[] ],
+
+    [ "esp:3V3",  "aht20:VCC", "red",   [] ],
+    [ "esp:GND.1","aht20:GND", "black", [] ],
+    [ "esp:6",    "aht20:SDA", "blue",  [] ],
+    [ "esp:7",    "aht20:SCL", "yellow",[] ],
+
+    [ "esp:3V3",  "nfc:VCC",   "red",   [] ],
+    [ "esp:GND.1","nfc:GND",   "black", [] ],
+    [ "esp:6",    "nfc:SDA",   "blue",  [] ],
+    [ "esp:7",    "nfc:SCL",   "yellow",[] ]
+  ],
+  "dependencies": {}
+}
