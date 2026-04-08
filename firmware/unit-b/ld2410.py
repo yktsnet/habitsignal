@@ -1,34 +1,23 @@
 # ld2410.py — Unit B
-# LD2410C mmWave レーダー（UART）
-# 在席・離席の変化のみを返す。生データは持たない。
+# LD2410C 24GHz mmWave radar driver
+# Returns presence state: "motion" / "still" / "empty" / None
 
 from machine import UART
 import time
 
 
 class LD2410:
-    """
-    LD2410C の UART 出力を読み取り、在席状態を返す。
-
-    LD2410C のデフォルト出力:
-      フレーム先頭: F4 F3 F2 F1
-      フレーム末尾: F8 F7 F6 F5
-      データ部 [8] の値:
-        0x00 = 無人
-        0x01 = 動きあり
-        0x02 = 静止あり（微細動き含む）
-    """
-
     HEADER = bytes([0xF4, 0xF3, 0xF2, 0xF1])
     FOOTER = bytes([0xF8, 0xF7, 0xF6, 0xF5])
 
     def __init__(self, uart_id, tx, rx, baudrate=256000):
-        self.uart = UART(uart_id, baudrate=baudrate, tx=tx, rx=rx)
-        time.sleep_ms(100)
+        self.uart = UART(uart_id, baudrate=baudrate, tx=tx, rx=rx, rxbuf=512)
+        time.sleep_ms(500)
 
     def _read_frame(self):
+        """Read one data frame from UART buffer. Timeout: 200ms."""
         buf = bytearray()
-        deadline = time.ticks_add(time.ticks_ms(), 500)
+        deadline = time.ticks_add(time.ticks_ms(), 200)
         while time.ticks_diff(deadline, time.ticks_ms()) > 0:
             if self.uart.any():
                 buf += self.uart.read(self.uart.any())
@@ -40,18 +29,24 @@ class LD2410:
             time.sleep_ms(10)
         return None
 
-    def read_presence(self):
+    def read_state(self):
         """
-        在席状態を返す。
-          True  = 在席（動き or 静止検知）
-          False = 離席
-          None  = 読み取り失敗
+        Returns current detection state:
+          "motion" — movement detected
+          "still"  — stationary presence
+          "empty"  — no one detected
+          None     — read failed
         """
         frame = self._read_frame()
         if frame is None or len(frame) < 13:
             return None
-        # フレーム検証
         if frame[:4] != self.HEADER:
             return None
-        target_state = frame[6]  # 0x00=無人, 0x02=静止, 0x03=動き
-        return target_state != 0x00
+        target_state = frame[8]
+        if target_state == 0x01 or target_state == 0x03:
+            return "motion"
+        elif target_state == 0x02:
+            return "still"
+        elif target_state == 0x00:
+            return "empty"
+        return None

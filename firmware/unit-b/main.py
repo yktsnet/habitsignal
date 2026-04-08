@@ -1,13 +1,18 @@
 # main.py — Unit B
-# 在席センサー: LD2410C → MQTT publish のみ
+# Samples LD2410C every 10s over a 5-minute window (30 samples).
+# Majority vote determines desk_on / desk_off.
+# Publishes exactly once per 5 minutes to VPS.
 
 import time
 import json
 import network
-from machine import Pin
 from umqtt.simple import MQTTClient
 import config
 from ld2410 import LD2410
+
+SAMPLE_INTERVAL = 10  # seconds between samples
+WINDOW_SAMPLES = 30  # 30 samples = 5 minutes
+PING_INTERVAL = 60  # MQTT keepalive
 
 
 def connect_wifi():
@@ -25,42 +30,88 @@ def connect_wifi():
 
 
 def connect_mqtt():
-    client = MQTTClient(config.MQTT_CLIENT_ID, config.MQTT_BROKER, port=config.MQTT_PORT)
+    client = MQTTClient(
+        config.MQTT_CLIENT_ID, config.MQTT_BROKER, port=config.MQTT_PORT, keepalive=60
+    )
     client.connect()
+    print(f"MQTT: {config.MQTT_BROKER}")
     return client
 
 
-# ── 初期化 ────────────────────────────────────────────────
+def majority_vote(counts):
+    """
+    Decide desk_on or desk_off from sample counts.
+    - any motion → desk_on
+    - still > empty → desk_on
+    - empty >= still → desk_off
+    - all null → desk_off (cannot determine)
+    """
+    if counts["motion"] > 0:
+        return "desk_on", "motion"
+    if counts["still"] > counts["empty"]:
+        return "desk_on", "still"
+    return "desk_off", "empty"
+
+
+# ── Init ─────────────────────────────────────────────────
 
 connect_wifi()
 mqtt = connect_mqtt()
 radar = LD2410(uart_id=1, tx=config.UART_TX, rx=config.UART_RX)
 
-# ── 状態管理 ─────────────────────────────────────────────
-# 変化があったときだけ publish する（毎秒 publish しない）
-
-last_presence = None
-PING_INTERVAL = 30  # 秒ごとに MQTT keepalive
-last_ping = time.time()
-
 print("Unit B ready")
 
-while True:
-    presence = radar.read_presence()
+# ── Main loop ─────────────────────────────────────────────
 
-    if presence is not None and presence != last_presence:
-        event_type = "desk_on" if presence else "desk_off"
-        payload = json.dumps({"type": event_type, "ts": time.time()})
+last_ping = time.time()
+window_start = time.time()
+counts = {"motion": 0, "still": 0, "empty": 0, "null": 0}
+sample_count = 0
+
+while True:
+    # Sample
+    state = radar.read_state()
+    if state in counts:
+        counts[state] += 1
+    else:
+        counts["null"] += 1
+    sample_count += 1
+
+    # End of window → publish once
+    if sample_count >= WINDOW_SAMPLES:
+        event_type, reason = majority_vote(counts)
+        payload = json.dumps(
+            {
+                "type": event_type,
+                "ts": int(window_start),
+                "payload": {
+                    "reason": reason,
+                    "motion": counts["motion"],
+                    "still": counts["still"],
+                    "empty": counts["empty"],
+                    "null": counts["null"],
+                },
+            }
+        )
         try:
             mqtt.publish(config.TOPIC_EVENTS, payload)
-            print(f"Published: {event_type}")
+            print(
+                f"Published: {event_type} ({reason}) "
+                f"motion={counts['motion']} still={counts['still']} "
+                f"empty={counts['empty']} null={counts['null']}"
+            )
         except Exception as e:
             print(f"MQTT error: {e}")
             try:
                 mqtt = connect_mqtt()
+                mqtt.publish(config.TOPIC_EVENTS, payload)
             except Exception:
                 pass
-        last_presence = presence
+
+        # Reset window
+        counts = {"motion": 0, "still": 0, "empty": 0, "null": 0}
+        sample_count = 0
+        window_start = time.time()
 
     # MQTT keepalive
     now = time.time()
@@ -68,7 +119,10 @@ while True:
         try:
             mqtt.ping()
         except Exception:
-            mqtt = connect_mqtt()
+            try:
+                mqtt = connect_mqtt()
+            except Exception:
+                pass
         last_ping = now
 
-    time.sleep_ms(500)
+    time.sleep(SAMPLE_INTERVAL)
