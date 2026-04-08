@@ -1,68 +1,90 @@
-# MongoDB クエリ集
-# Python から pymongo で実行する想定
+# queries.py — 分析クエリ集
 # すべての分析はここで行い、collector 側にロジックは持たない
 
-from pymongo import MongoClient
-from datetime import datetime, timezone, timedelta
+import psycopg2
+import psycopg2.extras
+import os
 
-mongo = MongoClient("mongodb://localhost:27017")
-db = mongo["habitsignal"]
-events = db["events"]
+PG_DSN = os.getenv("PG_DSN", "postgresql://habitsignal@localhost/habitsignal")
+
+
+def get_conn():
+    return psycopg2.connect(PG_DSN, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
 # ── 基本クエリ ────────────────────────────────────────────
 
+
 def get_events_today():
     """今日のイベントを全件取得"""
-    start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    return list(events.find({"server_ts": {"$gte": start}}).sort("ts", 1))
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT * FROM events
+            WHERE server_ts >= CURRENT_DATE
+            ORDER BY ts ASC
+        """
+        )
+        return cur.fetchall()
 
 
 def get_events_by_type(event_type, days=7):
     """直近 N 日間の指定タイプのイベント"""
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-    return list(events.find({"type": event_type, "server_ts": {"$gte": since}}).sort("ts", 1))
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT * FROM events
+            WHERE type = %s
+              AND server_ts >= NOW() - INTERVAL '%s days'
+            ORDER BY ts ASC
+        """,
+            (event_type, days),
+        )
+        return cur.fetchall()
 
 
 # ── 集計クエリ ────────────────────────────────────────────
+
 
 def work_minutes_by_day(days=7):
     """
     日ごとの仕事モード時間（分）を集計する。
     work_on / work_off のペアを突き合わせて算出する。
     """
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-    pipeline = [
-        {"$match": {
-            "type": {"$in": ["work_on", "work_off"]},
-            "server_ts": {"$gte": since}
-        }},
-        {"$sort": {"ts": 1}},
-        {"$group": {
-            "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$server_ts"}},
-            "events": {"$push": {"type": "$type", "ts": "$ts"}}
-        }},
-        {"$sort": {"_id": 1}}
-    ]
-    return list(events.aggregate(pipeline))
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                date_trunc('day', server_ts)::date AS day,
+                json_agg(json_build_object('type', type, 'ts', ts) ORDER BY ts) AS events
+            FROM events
+            WHERE type IN ('work_on', 'work_off')
+              AND server_ts >= NOW() - INTERVAL '%s days'
+            GROUP BY day
+            ORDER BY day ASC
+        """,
+            (days,),
+        )
+        return cur.fetchall()
 
 
 def desk_minutes_by_day(days=7):
     """日ごとの在席時間（分）を集計する"""
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-    pipeline = [
-        {"$match": {
-            "type": {"$in": ["desk_on", "desk_off"]},
-            "server_ts": {"$gte": since}
-        }},
-        {"$sort": {"ts": 1}},
-        {"$group": {
-            "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$server_ts"}},
-            "events": {"$push": {"type": "$type", "ts": "$ts"}}
-        }},
-        {"$sort": {"_id": 1}}
-    ]
-    return list(events.aggregate(pipeline))
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                date_trunc('day', server_ts)::date AS day,
+                json_agg(json_build_object('type', type, 'ts', ts) ORDER BY ts) AS events
+            FROM events
+            WHERE type IN ('desk_on', 'desk_off')
+              AND server_ts >= NOW() - INTERVAL '%s days'
+            GROUP BY day
+            ORDER BY day ASC
+        """,
+            (days,),
+        )
+        return cur.fetchall()
 
 
 def scores_with_env(days=30):
@@ -70,55 +92,58 @@ def scores_with_env(days=30):
     主観スコアと、その前後30分の平均温湿度を紐付ける。
     相関分析の基礎データとして使う。
     """
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-    score_events = list(events.find({
-        "type": "score",
-        "server_ts": {"$gte": since}
-    }).sort("ts", 1))
-
-    results = []
-    for s in score_events:
-        score_ts = s["ts"]
-        # スコア入力前後30分の環境データを取得
-        env_data = list(events.find({
-            "type": "env",
-            "ts": {"$gte": score_ts - 1800, "$lte": score_ts + 1800}
-        }))
-        if not env_data:
-            continue
-        avg_temp = sum(e["payload"]["temp"] for e in env_data) / len(env_data)
-        avg_hum = sum(e["payload"]["humidity"] for e in env_data) / len(env_data)
-        results.append({
-            "ts": score_ts,
-            "score": s["payload"]["value"],
-            "avg_temp": round(avg_temp, 1),
-            "avg_humidity": round(avg_hum, 1),
-        })
-    return results
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                s.ts                                          AS score_ts,
+                (s.payload->>'value')::int                   AS score,
+                AVG((e.payload->>'temp')::float)             AS avg_temp,
+                AVG((e.payload->>'humidity')::float)         AS avg_humidity
+            FROM events s
+            JOIN events e
+              ON e.type = 'env'
+             AND e.ts BETWEEN s.ts - 1800 AND s.ts + 1800
+            WHERE s.type = 'score'
+              AND s.server_ts >= NOW() - INTERVAL '%s days'
+            GROUP BY s.ts, s.payload->>'value'
+            ORDER BY s.ts ASC
+        """,
+            (days,),
+        )
+        return cur.fetchall()
 
 
 def water_count_by_day(days=7):
     """日ごとの給水回数"""
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-    pipeline = [
-        {"$match": {"type": "water", "server_ts": {"$gte": since}}},
-        {"$group": {
-            "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$server_ts"}},
-            "count": {"$sum": 1}
-        }},
-        {"$sort": {"_id": 1}}
-    ]
-    return list(events.aggregate(pipeline))
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                date_trunc('day', server_ts)::date AS day,
+                COUNT(*) AS count
+            FROM events
+            WHERE type = 'water'
+              AND server_ts >= NOW() - INTERVAL '%s days'
+            GROUP BY day
+            ORDER BY day ASC
+        """,
+            (days,),
+        )
+        return cur.fetchall()
 
 
 def exercise_days(days=30):
     """運動した日の一覧"""
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-    pipeline = [
-        {"$match": {"type": "exercise_start", "server_ts": {"$gte": since}}},
-        {"$group": {
-            "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$server_ts"}}
-        }},
-        {"$sort": {"_id": 1}}
-    ]
-    return [r["_id"] for r in events.aggregate(pipeline)]
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT date_trunc('day', server_ts)::date AS day
+            FROM events
+            WHERE type = 'exercise_start'
+              AND server_ts >= NOW() - INTERVAL '%s days'
+            ORDER BY day ASC
+        """,
+            (days,),
+        )
+        return [row["day"] for row in cur.fetchall()]
