@@ -1,16 +1,12 @@
 # HabitSignal
 
-> A personal IoT system that logs behavior, environment, and subjective scores across 4 measurement layers — to observe what conditions help work go well.
+> A personal IoT system that logs desk presence, work sessions, habits, and environment across 4 measurement layers — to observe what conditions help work go well.
 
-## Architecture
+## Status
 
-```
-Unit A (ESP32-C3) ─┐
-Unit B (ESP32-C3) ─┼─ MQTT ──→ Mosquitto (VPS) ──→ PostgreSQL
-                   │                                     │
-                   │                         Cloudflare Durable Objects
-                   └──────────────────────────── SSE ──→ Web Dashboard
-```
+- **Unit B** (presence sensor) — running, recording every 5 min
+- **Unit A** (main hub: NFC, OLED, env sensor) — in progress
+- **VPS** (Mosquitto + PostgreSQL + collector) — running
 
 ## Measurement Layers
 
@@ -26,8 +22,15 @@ Unit B (ESP32-C3) ─┼─ MQTT ──→ Mosquitto (VPS) ──→ PostgreSQL
 | Unit | Role | Components |
 |---|---|---|
 | Unit A | Main hub (desk) | ESP32-C3, SSD1306 OLED, PN532 NFC, AHT20+BMP280 |
-| Unit B | Presence sensor (under desk) | ESP32-C3, LD2410C mmWave radar |
-| Unit C | Sub display *(Phase 2)* | ESP32-C3, SSD1306 OLED |
+| Unit B | Presence sensor | ESP32-C3, LD2410C 24GHz mmWave radar |
+| Unit C | Sub display *(planned)* | ESP32-C3, SSD1306 OLED |
+
+## Architecture
+
+```
+Unit A (ESP32-C3) ─┐
+Unit B (ESP32-C3) ─┼─ MQTT ──→ Mosquitto (VPS) ──→ PostgreSQL
+```
 
 ## Stack
 
@@ -36,11 +39,8 @@ Unit B (ESP32-C3) ─┼─ MQTT ──→ Mosquitto (VPS) ──→ PostgreSQL
 | Firmware | MicroPython |
 | Transport | MQTT over WiFi |
 | Broker | Mosquitto |
-| Collector | Python (systemd service) |
-| DB | PostgreSQL (JSONB for payloads) |
-| External API | Spotify Web API |
-| Realtime | Cloudflare Durable Objects + SSE |
-| Frontend | Astro + Hono |
+| Collector | Python (systemd service, NixOS) |
+| DB | PostgreSQL (JSONB for event payloads) |
 | Infra | NixOS / Hetzner VPS |
 
 ## Repository Structure
@@ -49,12 +49,12 @@ Unit B (ESP32-C3) ─┼─ MQTT ──→ Mosquitto (VPS) ──→ PostgreSQL
 firmware/
   unit-a/     Main hub firmware
   unit-b/     Presence sensor firmware
-  unit-c/     Sub display firmware (Phase 2)
+  unit-c/     Sub display firmware (planned)
 server/
   collector/  MQTT → PostgreSQL
-  spotify/    Spotify poller (Phase 2)
+  spotify/    Spotify poller (planned)
 infra/        NixOS service definitions
-docs/         Wiring diagrams, spec
+docs/         Spec, wiring diagrams
 ```
 
 ## Docs
